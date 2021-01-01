@@ -1,5 +1,5 @@
 use super::event::{HashMapEvent, MapDiff};
-use super::signal::SignalHashMap;
+use crate::StructuralSignal;
 use futures::channel::mpsc;
 use futures_util::StreamExt;
 use im::HashMap;
@@ -73,15 +73,14 @@ impl<K: Clone + Eq + Hash, V: Clone> MutableHashMapSignal<K, V> {
 
 impl<K: Clone + Eq + Hash, V: Clone> Unpin for MutableHashMapSignal<K, V> {}
 
-impl<K: Clone + Eq + Hash, V: Clone> SignalHashMap for MutableHashMapSignal<K, V> {
-    type Key = K;
-    type Value = V;
+impl<K: Clone + Eq + Hash, V: Clone> StructuralSignal for MutableHashMapSignal<K, V> {
+    type Item = HashMapEvent<K, V>;
 
     #[inline]
-    fn poll_map_change(
+    fn poll_change(
         mut self: Pin<&mut Self>,
         cx: &mut Context,
-    ) -> Poll<Option<HashMapEvent<Self::Key, Self::Value>>> {
+    ) -> Poll<Option<HashMapEvent<K, V>>> {
         self.receiver.poll_next_unpin(cx)
     }
 }

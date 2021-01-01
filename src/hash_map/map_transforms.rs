@@ -1,6 +1,6 @@
 use super::event::{HashMapEvent, MapDiff};
 use super::hash_map::{MutableHashMap, MutableHashMapSignal};
-use super::signal::SignalHashMap;
+use crate::StructuralSignal;
 use core::hash::Hash;
 use pin_project::pin_project;
 use std::marker::PhantomData;
@@ -22,7 +22,7 @@ pub trait MutableHashMapTransformer {
 #[pin_project(project = TransformedMutableHashMapProj)]
 pub struct TransformedMutableHashMap<IS, T>
 where
-    IS: SignalHashMap,
+    IS: StructuralSignal<Item=HashMapEvent<T::InputKey, T::InputValue>>,
     T: MutableHashMapTransformer,
 {
     #[pin]
@@ -34,7 +34,7 @@ where
 
 impl<IS, T> TransformedMutableHashMap<IS, T>
 where
-    IS: SignalHashMap,
+    IS: StructuralSignal<Item=HashMapEvent<T::InputKey, T::InputValue>>,
     T: MutableHashMapTransformer,
 {
     pub(crate) fn new(input_signal: IS, transformer: T) -> TransformedMutableHashMap<IS, T> {
@@ -47,20 +47,19 @@ where
     }
 }
 
-impl<IS, T> SignalHashMap for TransformedMutableHashMap<IS, T>
+impl<IS, T> StructuralSignal for TransformedMutableHashMap<IS, T>
 where
     T: MutableHashMapTransformer,
-    IS: SignalHashMap<Key = T::InputKey, Value = T::InputValue>,
+    IS: StructuralSignal<Item=HashMapEvent<T::InputKey, T::InputValue>>,
 {
-    type Key = T::OutputKey;
-    type Value = T::OutputValue;
+    type Item = HashMapEvent<T::OutputKey, T::OutputValue>;
 
     // TODO should this inline ?
     #[inline]
-    fn poll_map_change(
+    fn poll_change(
         self: Pin<&mut Self>,
         cx: &mut Context,
-    ) -> Poll<Option<HashMapEvent<Self::Key, Self::Value>>> {
+    ) -> Poll<Option<HashMapEvent<T::OutputKey, T::OutputValue>>> {
         let TransformedMutableHashMapProj {
             mut input_signal,
             transformed_signal,
@@ -68,7 +67,7 @@ where
         } = self.project();
 
         loop {
-            let input_poll = input_signal.as_mut().poll_map_change(cx);
+            let input_poll = input_signal.as_mut().poll_change(cx);
             match input_poll {
                 Poll::Ready(Some(event)) => {
                     transformer.apply_event(event);
@@ -82,7 +81,7 @@ where
             }
         }
 
-        return transformed_signal.poll_map_change(cx);
+        return transformed_signal.poll_change(cx);
     }
 }
 

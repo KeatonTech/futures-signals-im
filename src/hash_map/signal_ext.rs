@@ -2,7 +2,7 @@ use super::event::{HashMapEvent, MapDiff};
 use super::map_transforms::{
     FilterHashMapTransformer, MapHashMapTransformer, TransformedMutableHashMap,
 };
-use super::signal::SignalHashMap;
+use crate::StructuralSignal;
 use core::hash::Hash;
 use futures_executor::block_on;
 use futures_signals::signal::Signal;
@@ -17,7 +17,7 @@ pub struct SignalHashMapKeyWatcher<K, V, S>
 where
     K: Clone + Eq + Hash,
     V: Clone,
-    S: SignalHashMap<Key = K, Value = V>,
+    S: StructuralSignal<Item=HashMapEvent<K, V>>,
 {
     #[pin]
     signal: S,
@@ -28,7 +28,7 @@ impl<K, V, S> Signal for SignalHashMapKeyWatcher<K, V, S>
 where
     K: Clone + Eq + Hash,
     V: Clone,
-    S: SignalHashMap<Key = K, Value = V>,
+    S: StructuralSignal<Item=HashMapEvent<K, V>>,
 {
     type Item = Option<V>;
 
@@ -36,7 +36,7 @@ where
         let SignalHashMapKeyWatcherProj { signal, key } = self.project();
         let match_key = key;
 
-        match signal.poll_map_change(cx) {
+        match signal.poll_change(cx) {
             Poll::Ready(Some(hash_map_event)) => match hash_map_event.diff {
                 MapDiff::Replace {} => Poll::Ready(Some(
                     hash_map_event.snapshot.get(match_key).map(|v| v.clone()),
@@ -65,15 +65,19 @@ where
     }
 }
 
-pub trait SignalHashMapExt: SignalHashMap
+pub trait SignalHashMapExt: StructuralSignal
 where
     Self: Sized,
 {
+    type Key: Clone + Eq + Hash;
+    type Value: Clone;
+    type SelfType: StructuralSignal<Item=HashMapEvent<Self::Key, Self::Value>>;
+        
     /// Returns a Signal that tracks the value of a particular key in the Map.
     fn get_signal_for_key(
         self,
         key: Self::Key,
-    ) -> SignalHashMapKeyWatcher<Self::Key, Self::Value, Self>;
+    ) -> SignalHashMapKeyWatcher<Self::Key, Self::Value, Self::SelfType>;
 
     /// Returns a version of this signal where every value in the map has been run
     /// through a transformer function.
@@ -94,7 +98,7 @@ where
     fn map_values<OV, F>(
         self,
         map_fn: F,
-    ) -> TransformedMutableHashMap<Self, MapHashMapTransformer<Self::Key, F, Self::Value, OV>>
+    ) -> TransformedMutableHashMap<Self::SelfType, MapHashMapTransformer<Self::Key, F, Self::Value, OV>>
     where
         OV: Clone,
         Self::Value: Clone,
@@ -120,7 +124,7 @@ where
     fn filter<F>(
         self,
         predicate: F,
-    ) -> TransformedMutableHashMap<Self, FilterHashMapTransformer<Self::Key, Self::Value, F>>
+    ) -> TransformedMutableHashMap<Self::SelfType, FilterHashMapTransformer<Self::Key, Self::Value, F>>
     where
         Self::Value: Clone,
         F: Fn(&Self::Value) -> bool;
@@ -143,10 +147,14 @@ where
 
 impl<K, V, I> SignalHashMapExt for I
 where
-    I: SignalHashMap<Key = K, Value = V>,
+    I: StructuralSignal<Item=HashMapEvent<K, V>>,
     K: Clone + Eq + Hash,
     V: Clone,
 {
+    type Key = K;
+    type Value = V;
+    type SelfType = I;
+
     fn get_signal_for_key(
         self,
         key: Self::Key,
@@ -187,7 +195,7 @@ where
         let poll_result = block_on(poll_fn(|cx| {
             let mut prev_event: Option<HashMapEvent<K, V>> = None;
             let maybe_event = loop {
-                match Pin::as_mut(&mut signal).poll_map_change(cx) {
+                match Pin::as_mut(&mut signal).poll_change(cx) {
                     Poll::Ready(Some(event)) => {
                         prev_event = Some(event);
                         continue;
