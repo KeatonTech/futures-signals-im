@@ -1,7 +1,6 @@
 use super::event::{HashMapEvent, MapDiff};
-use super::map_transforms::{
-    FilterHashMapTransformer, MapHashMapTransformer, TransformedMutableHashMap,
-};
+use super::map_transforms::{FilterHashMapTransformer, MapHashMapTransformer};
+use crate::transformer::TransformedStructuralSignal;
 use crate::StructuralSignal;
 use core::hash::Hash;
 use futures_executor::block_on;
@@ -12,12 +11,13 @@ use pin_project::pin_project;
 use pin_utils::pin_mut;
 use std::pin::Pin;
 use std::task::{Context, Poll};
+
 #[pin_project(project = SignalHashMapKeyWatcherProj)]
 pub struct SignalHashMapKeyWatcher<K, V, S>
 where
     K: Clone + Eq + Hash,
     V: Clone,
-    S: StructuralSignal<Item=HashMapEvent<K, V>>,
+    S: StructuralSignal<Item = HashMapEvent<K, V>>,
 {
     #[pin]
     signal: S,
@@ -28,7 +28,7 @@ impl<K, V, S> Signal for SignalHashMapKeyWatcher<K, V, S>
 where
     K: Clone + Eq + Hash,
     V: Clone,
-    S: StructuralSignal<Item=HashMapEvent<K, V>>,
+    S: StructuralSignal<Item = HashMapEvent<K, V>>,
 {
     type Item = Option<V>;
 
@@ -71,8 +71,7 @@ where
 {
     type Key: Clone + Eq + Hash;
     type Value: Clone;
-    type SelfType: StructuralSignal<Item=HashMapEvent<Self::Key, Self::Value>>;
-        
+    type SelfType: StructuralSignal<Item = HashMapEvent<Self::Key, Self::Value>>;
     /// Returns a Signal that tracks the value of a particular key in the Map.
     fn get_signal_for_key(
         self,
@@ -98,7 +97,11 @@ where
     fn map_values<OV, F>(
         self,
         map_fn: F,
-    ) -> TransformedMutableHashMap<Self::SelfType, MapHashMapTransformer<Self::Key, F, Self::Value, OV>>
+    ) -> TransformedStructuralSignal<
+        Self::SelfType,
+        <Self::SelfType as StructuralSignal>::Item,
+        MapHashMapTransformer<Self::Key, F, Self::Value, OV>,
+    >
     where
         OV: Clone,
         Self::Value: Clone,
@@ -124,7 +127,11 @@ where
     fn filter<F>(
         self,
         predicate: F,
-    ) -> TransformedMutableHashMap<Self::SelfType, FilterHashMapTransformer<Self::Key, Self::Value, F>>
+    ) -> TransformedStructuralSignal<
+        Self::SelfType,
+        <Self::SelfType as StructuralSignal>::Item,
+        FilterHashMapTransformer<Self::Key, Self::Value, F>,
+    >
     where
         Self::Value: Clone,
         F: Fn(&Self::Value) -> bool;
@@ -147,7 +154,7 @@ where
 
 impl<K, V, I> SignalHashMapExt for I
 where
-    I: StructuralSignal<Item=HashMapEvent<K, V>>,
+    I: StructuralSignal<Item = HashMapEvent<K, V>>,
     K: Clone + Eq + Hash,
     V: Clone,
 {
@@ -168,25 +175,33 @@ where
     fn map_values<OV, F>(
         self,
         map_fn: F,
-    ) -> TransformedMutableHashMap<Self, MapHashMapTransformer<Self::Key, F, Self::Value, OV>>
+    ) -> TransformedStructuralSignal<
+        Self,
+        Self::Item,
+        MapHashMapTransformer<Self::Key, F, Self::Value, OV>,
+    >
     where
         OV: Clone,
         Self::Value: Clone,
         F: Fn(&Self::Value) -> OV,
         Self: Sized,
     {
-        TransformedMutableHashMap::new(self, MapHashMapTransformer::new(map_fn))
+        TransformedStructuralSignal::new(self, MapHashMapTransformer::new(map_fn))
     }
 
     fn filter<F>(
         self,
         predicate: F,
-    ) -> TransformedMutableHashMap<Self, FilterHashMapTransformer<Self::Key, Self::Value, F>>
+    ) -> TransformedStructuralSignal<
+        Self,
+        Self::Item,
+        FilterHashMapTransformer<Self::Key, Self::Value, F>,
+    >
     where
         Self::Value: Clone,
         F: Fn(&Self::Value) -> bool,
     {
-        TransformedMutableHashMap::new(self, FilterHashMapTransformer::new(predicate))
+        TransformedStructuralSignal::new(self, FilterHashMapTransformer::new(predicate))
     }
 
     fn into_map_sync(self) -> Option<HashMap<K, V>> {

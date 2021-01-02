@@ -1,13 +1,10 @@
 use super::event::{HashMapEvent, MapDiff};
-use crate::StructuralSignal;
+use crate::ChannelStructuralSignal;
 use futures::channel::mpsc;
-use futures_util::StreamExt;
 use im::HashMap;
 use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::hash::Hash;
-use std::pin::Pin;
 use std::sync::Arc;
-use std::task::{Context, Poll};
 use std::iter::Iterator;
 
 // The senders vec will be cleaned up once at least this many senders
@@ -55,33 +52,6 @@ impl<K: Clone + Eq + Hash, V: Clone> MutableHashMapState<K, V> {
         self.senders
             .write()
             .retain(|maybe_sender| maybe_sender.is_some());
-    }
-}
-
-#[doc(hidden)]
-pub struct MutableHashMapSignal<K: Clone + Eq + Hash, V: Clone> {
-    receiver: mpsc::UnboundedReceiver<HashMapEvent<K, V>>,
-}
-
-impl<K: Clone + Eq + Hash, V: Clone> MutableHashMapSignal<K, V> {
-    pub fn new(
-        receiver: mpsc::UnboundedReceiver<HashMapEvent<K, V>>,
-    ) -> MutableHashMapSignal<K, V> {
-        MutableHashMapSignal { receiver }
-    }
-}
-
-impl<K: Clone + Eq + Hash, V: Clone> Unpin for MutableHashMapSignal<K, V> {}
-
-impl<K: Clone + Eq + Hash, V: Clone> StructuralSignal for MutableHashMapSignal<K, V> {
-    type Item = HashMapEvent<K, V>;
-
-    #[inline]
-    fn poll_change(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context,
-    ) -> Poll<Option<HashMapEvent<K, V>>> {
-        self.receiver.poll_next_unpin(cx)
     }
 }
 
@@ -133,12 +103,12 @@ impl<K: Clone + Eq + Hash, V: Clone> MutableHashMap<K, V> {
     /// Readers can be cloned. Note that Readers can hold a ReadLock which can
     /// block MutableHashMap::write() calls, so use them with care.
     #[inline]
-    pub fn reader(&self) -> MutableHashMapReader<K, V> {
+    pub fn reader(&self) -> MutableHashMapReader<K, V> { 
         MutableHashMapReader { 0: self.0.clone() }
     }
 
     #[inline]
-    pub fn as_signal(&self) -> MutableHashMapSignal<K, V> {
+    pub fn as_signal(&self) -> ChannelStructuralSignal<HashMapEvent<K, V>> {
         self.0.read().as_signal()
     }
 }
@@ -162,7 +132,7 @@ impl<K: Clone + Eq + Hash, V: Clone> MutableHashMapReader<K, V> {
     }
 
     #[inline]
-    pub fn as_signal(&self) -> MutableHashMapSignal<K, V> {
+    pub fn as_signal(&self) -> ChannelStructuralSignal<HashMapEvent<K, V>> {
         self.0.read().as_signal()
     }
 }
@@ -178,7 +148,7 @@ impl<K: Clone + Eq + Hash, V: Clone> MutableHashMapState<K, V> {
         self.hash_map.contains_key(key)
     }
 
-    pub fn as_signal(&self) -> MutableHashMapSignal<K, V> {
+    pub fn as_signal(&self) -> ChannelStructuralSignal<HashMapEvent<K, V>> {
         let (sender, receiver) = mpsc::unbounded();
         if !self.hash_map.is_empty() {
             sender
@@ -190,7 +160,7 @@ impl<K: Clone + Eq + Hash, V: Clone> MutableHashMapState<K, V> {
         }
 
         self.senders.write().push(Some(sender));
-        MutableHashMapSignal::new(receiver)
+        ChannelStructuralSignal::new(receiver)
     }
 
     #[inline]

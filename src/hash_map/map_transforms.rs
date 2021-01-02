@@ -1,89 +1,9 @@
 use super::event::{HashMapEvent, MapDiff};
-use super::hash_map::{MutableHashMap, MutableHashMapSignal};
-use crate::StructuralSignal;
+use super::hash_map::MutableHashMap;
+use crate::ChannelStructuralSignal;
+use crate::transformer::StructuralSignalTransformer;
 use core::hash::Hash;
-use pin_project::pin_project;
 use std::marker::PhantomData;
-use std::pin::Pin;
-use std::task::{Context, Poll};
-
-pub trait MutableHashMapTransformer {
-    type InputKey: Eq + Hash + Clone;
-    type InputValue: Clone;
-    type OutputKey: Eq + Hash + Clone;
-    type OutputValue: Clone;
-
-    fn apply_event(&mut self, map_event: HashMapEvent<Self::InputKey, Self::InputValue>);
-    fn get_transformed_hash_map<'a>(
-        &'a self,
-    ) -> &'a MutableHashMap<Self::OutputKey, Self::OutputValue>;
-}
-
-#[pin_project(project = TransformedMutableHashMapProj)]
-pub struct TransformedMutableHashMap<IS, T>
-where
-    IS: StructuralSignal<Item=HashMapEvent<T::InputKey, T::InputValue>>,
-    T: MutableHashMapTransformer,
-{
-    #[pin]
-    input_signal: IS,
-    #[pin]
-    transformed_signal: MutableHashMapSignal<T::OutputKey, T::OutputValue>,
-    transformer: T,
-}
-
-impl<IS, T> TransformedMutableHashMap<IS, T>
-where
-    IS: StructuralSignal<Item=HashMapEvent<T::InputKey, T::InputValue>>,
-    T: MutableHashMapTransformer,
-{
-    pub(crate) fn new(input_signal: IS, transformer: T) -> TransformedMutableHashMap<IS, T> {
-        let transformed_signal = transformer.get_transformed_hash_map().as_signal();
-        TransformedMutableHashMap {
-            input_signal,
-            transformed_signal,
-            transformer,
-        }
-    }
-}
-
-impl<IS, T> StructuralSignal for TransformedMutableHashMap<IS, T>
-where
-    T: MutableHashMapTransformer,
-    IS: StructuralSignal<Item=HashMapEvent<T::InputKey, T::InputValue>>,
-{
-    type Item = HashMapEvent<T::OutputKey, T::OutputValue>;
-
-    // TODO should this inline ?
-    #[inline]
-    fn poll_change(
-        self: Pin<&mut Self>,
-        cx: &mut Context,
-    ) -> Poll<Option<HashMapEvent<T::OutputKey, T::OutputValue>>> {
-        let TransformedMutableHashMapProj {
-            mut input_signal,
-            transformed_signal,
-            transformer,
-        } = self.project();
-
-        loop {
-            let input_poll = input_signal.as_mut().poll_change(cx);
-            match input_poll {
-                Poll::Ready(Some(event)) => {
-                    transformer.apply_event(event);
-                }
-                Poll::Ready(None) => {
-                    return Poll::Ready(None);
-                }
-                Poll::Pending => {
-                    break;
-                }
-            }
-        }
-
-        return transformed_signal.poll_change(cx);
-    }
-}
 
 
 // ** MAP_VALUES ** //
@@ -114,19 +34,17 @@ where
     }
 }
 
-impl<K, F, IV, OV> MutableHashMapTransformer for MapHashMapTransformer<K, F, IV, OV>
+impl<K, F, IV, OV> StructuralSignalTransformer for MapHashMapTransformer<K, F, IV, OV>
 where
     K: Hash + Eq + Clone,
     IV: Clone,
     OV: Clone,
     F: Fn(&IV) -> OV,
 {
-    type InputKey = K;
-    type InputValue = IV;
-    type OutputKey = K;
-    type OutputValue = OV;
+    type InputEvent = HashMapEvent<K, IV>;
+    type OutputSignal = ChannelStructuralSignal<HashMapEvent<K, OV>>;
 
-    fn apply_event(&mut self, map_event: HashMapEvent<Self::InputKey, Self::InputValue>) {
+    fn apply_event(&mut self, map_event: HashMapEvent<K, IV>) {
         let mut writer = self.hash_map.write();
         match map_event.diff {
             MapDiff::Replace {} => {
@@ -150,10 +68,8 @@ where
         }
     }
 
-    fn get_transformed_hash_map<'a>(
-        &'a self,
-    ) -> &'a MutableHashMap<Self::OutputKey, Self::OutputValue> {
-        &self.hash_map
+    fn get_signal(&self,) -> Self::OutputSignal {
+        self.hash_map.as_signal()
     }
 }
 
@@ -184,18 +100,16 @@ where
     }
 }
 
-impl<K, V, F> MutableHashMapTransformer for FilterHashMapTransformer<K, V, F>
+impl<K, V, F> StructuralSignalTransformer for FilterHashMapTransformer<K, V, F>
 where
     K: Hash + Eq + Clone,
     V: Clone,
     F: Fn(&V) -> bool,
 {
-    type InputKey = K;
-    type InputValue = V;
-    type OutputKey = K;
-    type OutputValue = V;
+    type InputEvent = HashMapEvent<K, V>;
+    type OutputSignal = ChannelStructuralSignal<HashMapEvent<K, V>>;
 
-    fn apply_event(&mut self, map_event: HashMapEvent<Self::InputKey, Self::InputValue>) {
+    fn apply_event(&mut self, map_event: HashMapEvent<K, V>) {
         let mut writer = self.hash_map.write();
         match map_event.diff {
             MapDiff::Replace {} => {
@@ -228,9 +142,7 @@ where
         }
     }
 
-    fn get_transformed_hash_map<'a>(
-        &'a self,
-    ) -> &'a MutableHashMap<Self::OutputKey, Self::OutputValue> {
-        &self.hash_map
+    fn get_signal(&self) -> Self::OutputSignal {
+        self.hash_map.as_signal()
     }
 }
