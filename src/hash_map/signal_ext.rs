@@ -3,12 +3,8 @@ use super::map_transforms::{FilterHashMapTransformer, MapHashMapTransformer};
 use crate::transformer::TransformedStructuralSignal;
 use crate::StructuralSignal;
 use core::hash::Hash;
-use futures_executor::block_on;
 use futures_signals::signal::Signal;
-use futures_util::future::poll_fn;
-use im::HashMap;
 use pin_project::pin_project;
-use pin_utils::pin_mut;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
@@ -83,6 +79,7 @@ where
     ///
     /// ```
     /// use signals_im::hash_map::{MutableHashMap, SignalHashMapExt};
+    /// use signals_im::StructuralSignalExt;
     /// use im::hashmap;
     ///
     /// let input_map = MutableHashMap::<u8, u8>::new();
@@ -91,7 +88,7 @@ where
     /// let multiplied = input_map.as_signal().map_values(|v| v * 2);
     /// input_map.write().insert(2, 2);
     ///
-    /// let multiplied_map = multiplied.into_map_sync().unwrap();
+    /// let multiplied_map = multiplied.snapshot().unwrap();
     /// assert_eq!(multiplied_map, hashmap!{1 => 2, 2 => 4});
     /// ```
     fn map_values<OV, F>(
@@ -111,6 +108,7 @@ where
     ///
     /// ```
     /// use signals_im::hash_map::{MutableHashMap, SignalHashMapExt};
+    /// use signals_im::StructuralSignalExt;
     /// use im::hashmap;
     ///
     /// let input_map = MutableHashMap::<u8, u8>::new();
@@ -121,7 +119,7 @@ where
     ///
     /// let odds_only = input_map.as_signal().filter(|v| v % 2 == 1);
     ///
-    /// let odds_only_map = odds_only.into_map_sync().unwrap();
+    /// let odds_only_map = odds_only.snapshot().unwrap();
     /// assert_eq!(odds_only_map, hashmap!{1 => 1, 2 => 1, 4 => 3});
     /// ```
     fn filter<F>(
@@ -135,21 +133,6 @@ where
     where
         Self::Value: Clone,
         F: Fn(&Self::Value) -> bool;
-
-    /// Retrieves the current value of the Signal as an IM HashMap.
-    ///
-    /// ```
-    /// use signals_im::hash_map::{MutableHashMap, SignalHashMapExt};
-    /// use im::hashmap;
-    ///
-    /// let input_map = MutableHashMap::<u8, u8>::new();
-    /// input_map.write().insert(1, 1);
-    ///
-    /// let signal = input_map.as_signal();
-    /// let current_val = signal.into_map_sync().unwrap();
-    /// assert_eq!(current_val, hashmap!{1 => 1});
-    /// ```
-    fn into_map_sync(self) -> Option<HashMap<Self::Key, Self::Value>>;
 }
 
 impl<K, V, I> SignalHashMapExt for I
@@ -202,29 +185,5 @@ where
         F: Fn(&Self::Value) -> bool,
     {
         TransformedStructuralSignal::new(self, FilterHashMapTransformer::new(predicate))
-    }
-
-    fn into_map_sync(self) -> Option<HashMap<K, V>> {
-        let signal = self;
-        pin_mut!(signal);
-        let poll_result = block_on(poll_fn(|cx| {
-            let mut prev_event: Option<HashMapEvent<K, V>> = None;
-            let maybe_event = loop {
-                match Pin::as_mut(&mut signal).poll_change(cx) {
-                    Poll::Ready(Some(event)) => {
-                        prev_event = Some(event);
-                        continue;
-                    }
-                    Poll::Ready(None) | Poll::Pending => {
-                        break prev_event;
-                    }
-                }
-            };
-            match maybe_event {
-                Some(event) => Poll::Ready(event.snapshot),
-                _ => Poll::Pending,
-            }
-        }));
-        return poll_result.into();
     }
 }

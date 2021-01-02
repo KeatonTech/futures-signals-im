@@ -1,15 +1,12 @@
 use super::event::{HashMapEvent, MapDiff};
+use crate::util::notify_senders;
 use crate::ChannelStructuralSignal;
 use futures::channel::mpsc;
 use im::HashMap;
 use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::hash::Hash;
-use std::sync::Arc;
 use std::iter::Iterator;
-
-// The senders vec will be cleaned up once at least this many senders
-// have been closed.
-static CHANNEL_CLEANUP_MIN_COUNT: i16 = 20;
+use std::sync::Arc;
 
 /// The internal state of a MutableHashMap or MutableHashMapReader. All
 /// clones (and readonly clones) will share this same instance.
@@ -25,43 +22,11 @@ pub struct MutableHashMapState<K: Clone + Eq + Hash, V: Clone> {
 
 impl<K: Clone + Eq + Hash, V: Clone> MutableHashMapState<K, V> {
     fn notify(&self, event: HashMapEvent<K, V>) {
-        // Tracks how many streams in the senders vec have expired. If this
-        // exceeds a certain threshold, clean up the senders vec to improve
-        // performance and reduce memory use.
-        let mut expired_count = 0;
-
-        for maybe_sender in self.senders.write().iter_mut() {
-            if let Some(sender) = maybe_sender {
-                if sender.is_closed() {
-                    maybe_sender.take();
-                    expired_count += 1;
-                } else {
-                    sender.unbounded_send(event.clone()).unwrap();
-                }
-            } else {
-                expired_count += 1;
-            }
-        }
-
-        if expired_count > CHANNEL_CLEANUP_MIN_COUNT {
-            self.cleanup_expired_channels();
-        }
-    }
-
-    fn cleanup_expired_channels(&self) {
-        self.senders
-            .write()
-            .retain(|maybe_sender| maybe_sender.is_some());
+        notify_senders(event, self.senders.write());
     }
 }
 
 /// A HashMap that can be observed as it changes over time.
-///
-/// Internally this is an Arc, so calling `.clone()` on it will duplicate
-/// the reference but not the data. This allows multiple objects or threads
-/// to access and modify this object at once (protected by an RwLock). Use the
-/// `.duplicate()` method to create a separate object that will not be affected
-/// by future updates.
 ///
 /// This structure is backed by `im.HashMap` and so requires that keys and values
 /// are clonable. The backing structure is optimized to clone only when necessary.
@@ -103,7 +68,7 @@ impl<K: Clone + Eq + Hash, V: Clone> MutableHashMap<K, V> {
     /// Readers can be cloned. Note that Readers can hold a ReadLock which can
     /// block MutableHashMap::write() calls, so use them with care.
     #[inline]
-    pub fn reader(&self) -> MutableHashMapReader<K, V> { 
+    pub fn reader(&self) -> MutableHashMapReader<K, V> {
         MutableHashMapReader { 0: self.0.clone() }
     }
 
@@ -168,7 +133,10 @@ impl<K: Clone + Eq + Hash, V: Clone> MutableHashMapState<K, V> {
         self.hash_map.clone()
     }
 
-    pub fn replace<E>(&mut self, entries: E) where E: Iterator<Item=(K, V)> {
+    pub fn replace<E>(&mut self, entries: E)
+    where
+        E: Iterator<Item = (K, V)>,
+    {
         self.hash_map.clear();
         for (key, value) in entries {
             self.hash_map.insert(key, value);

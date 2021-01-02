@@ -1,11 +1,21 @@
+use crate::util::{close_senders, notify_senders};
 use crate::StructuralSignal;
 use futures::channel::mpsc;
+use futures_executor::block_on;
+use futures_util::future::poll_fn;
 use futures_util::stream::StreamExt;
 use parking_lot::RwLock;
 use pin_project::pin_project;
+use pin_utils::pin_mut;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
+
+pub trait SnapshottableEvent {
+    type SnapshotType;
+
+    fn snapshot(&self) -> Self::SnapshotType;
+}
 
 pub trait StructuralSignalExt: StructuralSignal
 where
@@ -26,15 +36,33 @@ where
     /// // This transform will only occur once for each map update, regardless of
     /// // how many signals the broadcaster creates.
     /// let broadcaster = input_map.as_signal().map_values(|v| v * 2).broadcast();
-    /// assert_eq!(broadcaster.get_signal().into_map_sync().unwrap(), hashmap!{1 => 2});
+    /// assert_eq!(broadcaster.get_signal().snapshot().unwrap(), hashmap!{1 => 2});
     ///
     /// input_map.write().insert(2, 2);
-    /// assert_eq!(broadcaster.get_signal().into_map_sync().unwrap(), hashmap!{1 => 2, 2 => 4});
+    /// assert_eq!(broadcaster.get_signal().snapshot().unwrap(), hashmap!{1 => 2, 2 => 4});
     /// ```
     fn broadcast(self) -> StructuralSignalBroadcaster<Self::Item, Self>
     where
         Self: Unpin,
         Self::Item: Clone;
+
+    /// Retrieves the a clone of the current value of the Signal as a standard data structure.
+    ///
+    /// ```
+    /// use signals_im::hash_map::{MutableHashMap, SignalHashMapExt};
+    /// use signals_im::StructuralSignalExt;
+    /// use im::hashmap;
+    ///
+    /// let input_map = MutableHashMap::<u8, u8>::new();
+    /// input_map.write().insert(1, 1);
+    ///
+    /// let signal = input_map.as_signal();
+    /// let current_val = signal.snapshot().unwrap();
+    /// assert_eq!(current_val, hashmap!{1 => 1});
+    /// ```
+    fn snapshot(self) -> Option<<Self::Item as SnapshottableEvent>::SnapshotType>
+    where
+        Self::Item: SnapshottableEvent;
 }
 
 impl<I> StructuralSignalExt for I
@@ -48,6 +76,33 @@ where
         Self::Item: Clone,
     {
         StructuralSignalBroadcaster::new(self)
+    }
+
+    fn snapshot(self) -> Option<<Self::Item as SnapshottableEvent>::SnapshotType>
+    where
+        Self::Item: SnapshottableEvent,
+    {
+        let signal = self;
+        pin_mut!(signal);
+        let poll_result = block_on(poll_fn(|cx| {
+            let mut prev_event: Option<Self::Item> = None;
+            let maybe_event = loop {
+                match Pin::as_mut(&mut signal).poll_change(cx) {
+                    Poll::Ready(Some(event)) => {
+                        prev_event = Some(event);
+                        continue;
+                    }
+                    Poll::Ready(None) | Poll::Pending => {
+                        break prev_event;
+                    }
+                }
+            };
+            match maybe_event {
+                Some(event) => Poll::Ready(event.snapshot()),
+                _ => Poll::Pending,
+            }
+        }));
+        return poll_result.into();
     }
 }
 
@@ -80,19 +135,11 @@ where
         if let Poll::Ready(maybe_event) = &poll_channel {
             if let Some(event) = maybe_event {
                 most_recent_event.replace(event.clone());
+                notify_senders(event.clone(), senders);
+            } else {
+                close_senders(senders);
             }
 
-            for maybe_sender in senders.iter_mut() {
-                if let Some(sender) = maybe_sender {
-                    if sender.is_closed() {
-                        maybe_sender.take();
-                    } else if (&maybe_event).is_some() {
-                        sender.unbounded_send(maybe_event.clone().unwrap()).unwrap();
-                    } else {
-                        sender.close_channel();
-                    }
-                }
-            }
             return true;
         } else {
             return false;
