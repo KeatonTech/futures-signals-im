@@ -1,7 +1,8 @@
-use super::event::{HashMapEvent, MapDiff};
+use super::event::HashMapEvent;
 use super::map_transforms::{FilterHashMapTransformer, MapHashMapTransformer};
-use crate::transformer::TransformedStructuralSignal;
+use crate::structural_signal::transformer::TransformedStructuralSignal;
 use crate::StructuralSignal;
+use crate::structural_signal::pull_source::PullableDiff;
 use core::hash::Hash;
 use futures_signals::signal::Signal;
 use pin_project::pin_project;
@@ -29,34 +30,30 @@ where
     type Item = Option<V>;
 
     fn poll_change(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Option<V>>> {
-        let SignalHashMapKeyWatcherProj { signal, key } = self.project();
-        let match_key = key;
+        let SignalHashMapKeyWatcherProj { signal, key: local_key } = self.project();
 
         match signal.poll_change(cx) {
-            Poll::Ready(Some(hash_map_event)) => match hash_map_event.diff {
-                MapDiff::Replace {} => Poll::Ready(Some(
-                    hash_map_event.snapshot.get(match_key).map(|v| v.clone()),
-                )),
-                MapDiff::Insert { key } => {
-                    if key == *match_key {
-                        Poll::Ready(Some(
-                            hash_map_event.snapshot.get(match_key).map(|v| v.clone()),
-                        ))
+            Poll::Ready(Some(hash_map_event)) => {
+                let has_key_event = hash_map_event.diffs.iter().find(|diff| match diff.get_key() {
+                    Some(key) => *key == *local_key,
+                    None => false
+                }).is_some();
+                if has_key_event {
+                    Poll::Ready(Some(hash_map_event.snapshot.get(local_key).map(|v| v.clone())))
+                } else {
+                    let has_global_event = hash_map_event.diffs.iter().find(|diff| match diff.get_key() {
+                        Some(_key) => false,
+                        None => true
+                    }).is_some();
+                    if has_global_event {
+                        Poll::Ready(Some(hash_map_event.snapshot.get(local_key).map(|v| v.clone())))
                     } else {
                         Poll::Pending
                     }
                 }
-                MapDiff::Remove { key } => {
-                    if key == *match_key {
-                        Poll::Ready(Some(None))
-                    } else {
-                        Poll::Pending
-                    }
-                }
-                MapDiff::Clear {} => Poll::Ready(Some(None)),
             },
             Poll::Ready(None) => Poll::Ready(None),
-            Poll::Pending => Poll::Pending,
+            Poll::Pending => Poll::Pending
         }
     }
 }

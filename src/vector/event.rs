@@ -1,5 +1,5 @@
 use im::Vector;
-use crate::structural_signal_ext::SnapshottableEvent;
+use crate::structural_signal::structural_signal_ext::SnapshottableEvent;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VectorIndex {

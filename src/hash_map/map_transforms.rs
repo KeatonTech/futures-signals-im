@@ -1,10 +1,9 @@
 use super::event::{HashMapEvent, MapDiff};
-use super::hash_map::MutableHashMap;
-use crate::ChannelStructuralSignal;
-use crate::transformer::StructuralSignalTransformer;
+use super::hash_map::{MutableHashMap, MutableHashMapState};
+use crate::structural_signal::pull_source::PullSourceStructuralSignal;
+use crate::structural_signal::transformer::StructuralSignalTransformer;
 use core::hash::Hash;
 use std::marker::PhantomData;
-
 
 // ** MAP_VALUES ** //
 
@@ -42,37 +41,39 @@ where
     F: Fn(&IV) -> OV,
 {
     type InputEvent = HashMapEvent<K, IV>;
-    type OutputSignal = ChannelStructuralSignal<HashMapEvent<K, OV>>;
+    type OutputSignal = PullSourceStructuralSignal<MutableHashMapState<K, OV>>;
 
     fn apply_event(&mut self, map_event: HashMapEvent<K, IV>) {
         let mut writer = self.hash_map.write();
-        match map_event.diff {
-            MapDiff::Replace {} => {
-                writer.replace(
-                    map_event
-                        .snapshot
-                        .into_iter()
-                        .map(|(k, ov)| (k, (self.map_fn)(&ov))),
-                );
-            }
-            MapDiff::Insert { key } => {
-                let mapped_val = (self.map_fn)(map_event.snapshot.get(&key).unwrap());
-                writer.insert(key, mapped_val);
-            }
-            MapDiff::Remove { key } => {
-                writer.remove(&key);
-            }
-            MapDiff::Clear {} => {
-                writer.clear();
+        for diff in map_event.diffs {
+            match diff {
+                MapDiff::Replace {} => {
+                    writer.replace(
+                        map_event
+                            .snapshot
+                            .clone()
+                            .into_iter()
+                            .map(|(k, ov)| (k, (self.map_fn)(&ov))),
+                    );
+                }
+                MapDiff::Insert { key } => {
+                    let mapped_val = (self.map_fn)(map_event.snapshot.get(&key).unwrap());
+                    writer.insert(key, mapped_val);
+                }
+                MapDiff::Remove { key } => {
+                    writer.remove(&key);
+                }
+                MapDiff::Clear {} => {
+                    writer.clear();
+                }
             }
         }
     }
 
-    fn get_signal(&self,) -> Self::OutputSignal {
+    fn get_signal(&self) -> Self::OutputSignal {
         self.hash_map.as_signal()
     }
 }
-
 
 // ** FILTER ** //
 
@@ -107,37 +108,40 @@ where
     F: Fn(&V) -> bool,
 {
     type InputEvent = HashMapEvent<K, V>;
-    type OutputSignal = ChannelStructuralSignal<HashMapEvent<K, V>>;
+    type OutputSignal = PullSourceStructuralSignal<MutableHashMapState<K, V>>;
 
     fn apply_event(&mut self, map_event: HashMapEvent<K, V>) {
         let mut writer = self.hash_map.write();
-        match map_event.diff {
-            MapDiff::Replace {} => {
-                writer.replace(
-                    map_event
-                        .snapshot
-                        .into_iter()
-                        .filter(|(_k, v)| (self.predicate)(v)),
-                );
-            }
-            MapDiff::Insert { key } => {
-                let val = map_event.snapshot.get(&key).unwrap();
-                let passes_predicate = (self.predicate)(val);
-                if passes_predicate {
-                    writer.insert(key, val.clone());
-                    return;
+        for diff in map_event.diffs {
+            match diff {
+                MapDiff::Replace {} => {
+                    writer.replace(
+                        map_event
+                            .snapshot
+                            .clone()
+                            .into_iter()
+                            .filter(|(_k, v)| (self.predicate)(v)),
+                    );
                 }
+                MapDiff::Insert { key } => {
+                    let val = map_event.snapshot.get(&key).unwrap();
+                    let passes_predicate = (self.predicate)(val);
+                    if passes_predicate {
+                        writer.insert(key, val.clone());
+                        return;
+                    }
 
-                let currently_exists = self.hash_map.read().contains_key(&key);
-                if  currently_exists {
+                    let currently_exists = self.hash_map.read().contains_key(&key);
+                    if currently_exists {
+                        writer.remove(&key);
+                    }
+                }
+                MapDiff::Remove { key } => {
                     writer.remove(&key);
                 }
-            }
-            MapDiff::Remove { key } => {
-                writer.remove(&key);
-            }
-            MapDiff::Clear {} => {
-                writer.clear();
+                MapDiff::Clear {} => {
+                    writer.clear();
+                }
             }
         }
     }

@@ -1,7 +1,7 @@
 use super::event::{HashMapEvent, MapDiff};
-use crate::util::notify_senders;
-use crate::ChannelStructuralSignal;
-use futures::channel::mpsc;
+use crate::structural_signal::pull_source::{
+    PullSourceHost, PullSourceStructuralSignal, StructrualSignalPullSource,
+};
 use im::HashMap;
 use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::hash::Hash;
@@ -17,12 +17,22 @@ use std::sync::Arc;
 #[derive(Debug)]
 pub struct MutableHashMapState<K: Clone + Eq + Hash, V: Clone> {
     hash_map: HashMap<K, V>,
-    senders: RwLock<Vec<Option<mpsc::UnboundedSender<HashMapEvent<K, V>>>>>,
+    pull_source: StructrualSignalPullSource<MapDiff<K>>,
 }
 
-impl<K: Clone + Eq + Hash, V: Clone> MutableHashMapState<K, V> {
-    fn notify(&self, event: HashMapEvent<K, V>) {
-        notify_senders(event, self.senders.write());
+impl<K: Clone + Eq + Hash, V: Clone> PullSourceHost for MutableHashMapState<K, V> {
+    type DiffType = MapDiff<K>;
+    type EventType = HashMapEvent<K, V>;
+
+    fn get_pull_source<'a>(&'a mut self) -> &'a mut StructrualSignalPullSource<Self::DiffType> {
+        &mut self.pull_source
+    }
+
+    fn make_event(&self, diffs: Vec<Self::DiffType>) -> Self::EventType {
+        HashMapEvent {
+            snapshot: self.hash_map.clone(),
+            diffs: diffs,
+        }
     }
 }
 
@@ -37,7 +47,7 @@ impl<K: Clone + Eq + Hash, V: Clone> Clone for MutableHashMap<K, V> {
         MutableHashMap {
             0: Arc::new(RwLock::new(MutableHashMapState {
                 hash_map: self.0.read().hash_map.clone(),
-                senders: RwLock::new(vec![]),
+                pull_source: StructrualSignalPullSource::new(),
             })),
         }
     }
@@ -58,7 +68,7 @@ impl<K: Clone + Eq + Hash, V: Clone> MutableHashMap<K, V> {
         MutableHashMap {
             0: Arc::new(RwLock::new(MutableHashMapState {
                 hash_map: HashMap::new(),
-                senders: RwLock::new(vec![]),
+                pull_source: StructrualSignalPullSource::new(),
             })),
         }
     }
@@ -73,8 +83,8 @@ impl<K: Clone + Eq + Hash, V: Clone> MutableHashMap<K, V> {
     }
 
     #[inline]
-    pub fn as_signal(&self) -> ChannelStructuralSignal<HashMapEvent<K, V>> {
-        self.0.read().as_signal()
+    pub fn as_signal(&self) -> PullSourceStructuralSignal<MutableHashMapState<K, V>> {
+        PullSourceStructuralSignal::new(self.0.clone())
     }
 }
 
@@ -97,12 +107,17 @@ impl<K: Clone + Eq + Hash, V: Clone> MutableHashMapReader<K, V> {
     }
 
     #[inline]
-    pub fn as_signal(&self) -> ChannelStructuralSignal<HashMapEvent<K, V>> {
-        self.0.read().as_signal()
+    pub fn as_signal(&self) -> PullSourceStructuralSignal<MutableHashMapState<K, V>> {
+        PullSourceStructuralSignal::new(self.0.clone())
     }
 }
 
 impl<K: Clone + Eq + Hash, V: Clone> MutableHashMapState<K, V> {
+    #[inline]
+    fn add_diff(&mut self, diff: MapDiff<K>) {
+        self.pull_source.add_diff(diff);
+    }
+
     #[inline]
     pub fn get(&self, key: &K) -> Option<&V> {
         self.hash_map.get(key)
@@ -111,21 +126,6 @@ impl<K: Clone + Eq + Hash, V: Clone> MutableHashMapState<K, V> {
     #[inline]
     pub fn contains_key(&self, key: &K) -> bool {
         self.hash_map.contains_key(key)
-    }
-
-    pub fn as_signal(&self) -> ChannelStructuralSignal<HashMapEvent<K, V>> {
-        let (sender, receiver) = mpsc::unbounded();
-        if !self.hash_map.is_empty() {
-            sender
-                .unbounded_send(HashMapEvent {
-                    snapshot: self.hash_map.clone(),
-                    diff: MapDiff::Replace {},
-                })
-                .unwrap();
-        }
-
-        self.senders.write().push(Some(sender));
-        ChannelStructuralSignal::new(receiver)
     }
 
     #[inline]
@@ -141,20 +141,14 @@ impl<K: Clone + Eq + Hash, V: Clone> MutableHashMapState<K, V> {
         for (key, value) in entries {
             self.hash_map.insert(key, value);
         }
-        self.notify(HashMapEvent {
-            snapshot: self.snapshot(),
-            diff: MapDiff::Replace {},
-        });
+        self.add_diff(MapDiff::Replace {});
     }
 
     pub fn insert(&mut self, k: K, v: V) -> Option<V> {
         let remember_k = k.clone();
         let result = self.hash_map.insert(k, v);
 
-        self.notify(HashMapEvent {
-            snapshot: self.snapshot(),
-            diff: MapDiff::Insert { key: remember_k },
-        });
+        self.add_diff(MapDiff::Insert { key: remember_k });
         return result;
     }
 
@@ -164,10 +158,7 @@ impl<K: Clone + Eq + Hash, V: Clone> MutableHashMapState<K, V> {
             return None;
         }
 
-        self.notify(HashMapEvent {
-            snapshot: self.snapshot(),
-            diff: MapDiff::Remove { key: k.clone() },
-        });
+        self.add_diff(MapDiff::Remove { key: k.clone() });
         return result;
     }
 
@@ -177,9 +168,6 @@ impl<K: Clone + Eq + Hash, V: Clone> MutableHashMapState<K, V> {
         }
 
         self.hash_map.clear();
-        self.notify(HashMapEvent {
-            snapshot: self.snapshot(),
-            diff: MapDiff::Clear {},
-        });
+        self.add_diff(MapDiff::Clear {})
     }
 }
