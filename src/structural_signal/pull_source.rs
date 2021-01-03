@@ -1,17 +1,20 @@
+use crate::StructuralSignal;
 use im::HashMap; // Doesn't need to be immutable, but no need to pull in another HashMap.
+use parking_lot::RwLock;
+use pin_project::pin_project;
 use std::collections::BTreeMap;
 use std::hash::Hash;
-use std::sync::Arc;
-use parking_lot::RwLock;
-use std::task::{Poll, Context};
-use crate::StructuralSignal;
-use pin_project::pin_project;
 use std::pin::Pin;
+use std::sync::Arc;
+use std::task::{Context, Poll};
 
 pub(crate) type DiffNumber = usize;
 pub(crate) type SignalId = usize;
 
-pub trait PullableDiff: Clone where Self: Sized {
+pub trait PullableDiff: Clone
+where
+    Self: Sized,
+{
     type KeyType: Clone + Eq + Hash;
 
     fn get_key(&self) -> Option<&Self::KeyType>;
@@ -19,7 +22,10 @@ pub trait PullableDiff: Clone where Self: Sized {
     fn full_replace() -> Self;
 }
 
-pub trait PullSourceHost where Self: Sized {
+pub trait PullSourceHost
+where
+    Self: Sized,
+{
     type DiffType: PullableDiff;
     type EventType: Clone;
 
@@ -60,12 +66,14 @@ impl<DiffType: PullableDiff> StructrualSignalPullSource<DiffType> {
         let maybe_diff_key = diff.get_key().map(|key| key.clone());
         if let Some(diff_key) = maybe_diff_key {
             if self.diffs_per_key.contains_key(&diff_key) {
-                let prev_diff = self.diffs.remove(self.diffs_per_key.get(&diff_key).unwrap()).unwrap();
+                let prev_diff = self
+                    .diffs
+                    .remove(self.diffs_per_key.get(&diff_key).unwrap())
+                    .unwrap();
                 self.diffs_per_key.remove(&diff_key);
                 let maybe_merged = diff.merge_with_previous(prev_diff);
                 if let Some(merged) = maybe_merged {
                     diff = merged;
-                    
                 } else {
                     // If the two diffs cancel out, the first one is already removed, and
                     // the second one should simply not be added.
@@ -74,8 +82,8 @@ impl<DiffType: PullableDiff> StructrualSignalPullSource<DiffType> {
             }
 
             // This diff will stand in for the current key.
-            self.diffs_per_key.insert(diff_key.clone(), self.next_diff_index);
-
+            self.diffs_per_key
+                .insert(diff_key.clone(), self.next_diff_index);
         } else {
             // If this diff affects no particular key, assume it affects _all_ keys.
             // Think: Replace or Clear.
@@ -83,7 +91,6 @@ impl<DiffType: PullableDiff> StructrualSignalPullSource<DiffType> {
             self.diffs.clear();
             self.diffs_per_key.clear();
         }
-        
         self.diffs.insert(self.next_diff_index, diff);
         self.next_diff_index += 1;
     }
@@ -95,51 +102,68 @@ impl<DiffType: PullableDiff> StructrualSignalPullSource<DiffType> {
             if *last_diff_number == current_diff_number {
                 return vec![];
             }
-            
-            self.diffs.range(last_diff_number..).map(|(_k, v)| v.clone()).collect()
+
+            self.diffs
+                .range(last_diff_number..)
+                .map(|(_k, v)| v.clone())
+                .collect()
         } else {
             vec![DiffType::full_replace()]
         };
-        self.signal_last_diff_numbers.insert(signal_id, current_diff_number);
+        self.signal_last_diff_numbers
+            .insert(signal_id, current_diff_number);
         return results;
     }
 
     pub fn get_next_signal_id(&mut self) -> SignalId {
         let next_id = self.next_signal_id;
-        self.next_signal_id += 1; 
+        self.next_signal_id += 1;
         return next_id;
     }
 
     pub fn has_listening_signal(&self) -> bool {
         self.signal_last_diff_numbers.len() > 0
-    } 
+    }
 }
 
 /// A Signal derived from a PullSource.
 #[pin_project(project = PullSourceStructuralSignalProj)]
-pub struct PullSourceStructuralSignal<H> where
+pub struct PullSourceStructuralSignal<H>
+where
     H: PullSourceHost,
 {
     id: SignalId,
-    pull_source_host: Arc<RwLock<H>>
+    pull_source_host: Arc<RwLock<H>>,
 }
 
-impl<H> PullSourceStructuralSignal<H> where
+impl<H> PullSourceStructuralSignal<H>
+where
     H: PullSourceHost,
 {
     pub(crate) fn new(pull_source_host: Arc<RwLock<H>>) -> PullSourceStructuralSignal<H> {
-        let id = pull_source_host.write().get_pull_source().get_next_signal_id();
-        PullSourceStructuralSignal {id, pull_source_host}
-    }   
+        let id = pull_source_host
+            .write()
+            .get_pull_source()
+            .get_next_signal_id();
+        PullSourceStructuralSignal {
+            id,
+            pull_source_host,
+        }
+    }
 }
 
-impl<H> StructuralSignal for PullSourceStructuralSignal<H> where
+impl<H> StructuralSignal for PullSourceStructuralSignal<H>
+where
     H: PullSourceHost,
 {
     type Item = H::EventType;
 
     fn poll_change(self: Pin<&mut Self>, _: &mut Context) -> Poll<Option<H::EventType>> {
-        let diffs = self.pull_source_host.write().get_pull_source().pull_signal(self.id);
+        let diffs = self
+            .pull_source_host
+            .write()
+            .get_pull_source()
+            .pull_signal(self.id);
         if diffs.is_empty() {
             Poll::Pending
         } else {

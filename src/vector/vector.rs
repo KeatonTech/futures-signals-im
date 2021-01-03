@@ -6,7 +6,7 @@ use im::Vector;
 use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::iter::FromIterator;
 use std::iter::Iterator;
-use std::ops::Index;
+use std::ops::{Deref, Index};
 use std::slice::SliceIndex;
 use std::sync::Arc;
 
@@ -232,5 +232,13 @@ impl<T: Clone> MutableVectorState<T> {
             snapshot: self.snapshot(),
             diff: VectorDiff::Clear {},
         });
+    }
+}
+
+impl<T: Clone> Deref for MutableVectorState<T> {
+    type Target = Vector<T>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.vector
     }
 }

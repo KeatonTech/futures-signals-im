@@ -2,7 +2,11 @@ use super::event::{HashMapEvent, MapDiff};
 use super::hash_map::{MutableHashMap, MutableHashMapState};
 use crate::structural_signal::pull_source::PullSourceStructuralSignal;
 use crate::structural_signal::transformer::StructuralSignalTransformer;
+use crate::vector::{MutableVector, VectorEvent};
+use crate::ChannelStructuralSignal;
 use core::hash::Hash;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::Hasher;
 use std::marker::PhantomData;
 
 // ** MAP_VALUES ** //
@@ -70,6 +74,7 @@ where
         }
     }
 
+    #[inline]
     fn get_signal(&self) -> Self::OutputSignal {
         self.hash_map.as_signal()
     }
@@ -146,7 +151,96 @@ where
         }
     }
 
+    #[inline]
     fn get_signal(&self) -> Self::OutputSignal {
         self.hash_map.as_signal()
+    }
+}
+
+// ** ENTRIES ** //
+
+pub struct EntriesHashMapTransformer<K, V>
+where
+    K: Hash + Eq + Clone,
+    V: Clone,
+{
+    vector: MutableVector<(K, V)>,
+}
+
+impl<K, V> EntriesHashMapTransformer<K, V>
+where
+    K: Hash + Eq + Clone,
+    V: Clone,
+{
+    pub(crate) fn new() -> EntriesHashMapTransformer<K, V> {
+        EntriesHashMapTransformer {
+            vector: MutableVector::new(),
+        }
+    }
+}
+
+#[inline]
+fn hashed_key_sort<'r, K: Hash, V>(entry: &'r (K, V)) -> u64 {
+    hash_key(&entry.0)
+}
+
+#[inline]
+fn hash_key<K: Hash>(key: &K) -> u64 {
+    let mut h = DefaultHasher::new();
+    key.hash(&mut h);
+    h.finish()
+}
+
+impl<K, V> StructuralSignalTransformer for EntriesHashMapTransformer<K, V>
+where
+    K: Hash + Eq + Clone,
+    V: Clone,
+{
+    type InputEvent = HashMapEvent<K, V>;
+    type OutputSignal = ChannelStructuralSignal<VectorEvent<(K, V)>>;
+
+    fn apply_event(&mut self, map_event: HashMapEvent<K, V>) {
+        let mut writer = self.vector.write();
+        for diff in map_event.diffs {
+            match diff {
+                MapDiff::Replace {} => {
+                    let mut snapshot_vec = map_event
+                        .snapshot
+                        .clone()
+                        .into_iter()
+                        .collect::<Vec<(K, V)>>();
+                    snapshot_vec.sort_by_key(hashed_key_sort);
+                    writer.replace(snapshot_vec.into_iter());
+                }
+                MapDiff::Insert { key } => {
+                    let key_hash = hash_key(&key);
+                    let insert_at_index = writer.binary_search_by_key(&key_hash, hashed_key_sort);
+                    let val = map_event.snapshot.get(&key).unwrap().clone();
+                    match insert_at_index {
+                        Result::Ok(index) => {
+                            writer.set(index, (key, val));
+                        }
+                        Result::Err(index) => {
+                            writer.insert(index, (key, val));
+                        }
+                    }
+                }
+                MapDiff::Remove { key } => {
+                    let key_hash = hash_key(&key);
+                    let remove_at_index = writer.binary_search_by_key(&key_hash, hashed_key_sort);
+                    if let Result::Ok(index) = remove_at_index {
+                        writer.remove(index);
+                    }
+                }
+                MapDiff::Clear {} => {
+                    writer.clear();
+                }
+            }
+        }
+    }
+
+    #[inline]
+    fn get_signal(&self) -> Self::OutputSignal {
+        self.vector.as_signal()
     }
 }
