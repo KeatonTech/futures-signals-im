@@ -54,11 +54,15 @@ impl<K: Clone + Eq + Hash, V: Clone> Clone for MutableHashMap<K, V> {
 }
 
 impl<K: Clone + Eq + Hash, V: Clone> MutableHashMap<K, V> {
+    /// Returns a readonly view into the underlying state that can be used
+    /// to read values from the HashMap.
     #[inline]
     pub fn read(&self) -> RwLockReadGuard<MutableHashMapState<K, V>> {
         self.0.read()
     }
 
+    /// Returns a writer into the underlying state that can be used to
+    /// modify the HashMap.
     #[inline]
     pub fn write(&self) -> RwLockWriteGuard<MutableHashMapState<K, V>> {
         self.0.write()
@@ -82,6 +86,8 @@ impl<K: Clone + Eq + Hash, V: Clone> MutableHashMap<K, V> {
         MutableHashMapReader { 0: self.0.clone() }
     }
 
+    /// Creates a signal that tracks the value of this HashMap. Signals can be directly
+    /// used for UI, or can be transformed with SignalHashMapExt.
     #[inline]
     pub fn as_signal(&self) -> PullSourceStructuralSignal<MutableHashMapState<K, V>> {
         PullSourceStructuralSignal::new(self.0.clone())
@@ -101,11 +107,15 @@ impl<K: Clone + Eq + Hash, V: Clone> Clone for MutableHashMapReader<K, V> {
 }
 
 impl<K: Clone + Eq + Hash, V: Clone> MutableHashMapReader<K, V> {
+    /// Returns a readonly view into the underlying state that can be used
+    /// to read values from the HashMap.
     #[inline]
     pub fn read(&self) -> RwLockReadGuard<MutableHashMapState<K, V>> {
         self.0.read()
     }
 
+    /// Creates a signal that tracks the value of this HashMap. Signals can be directly
+    /// used for UI, or can be transformed with SignalHashMapExt.
     #[inline]
     pub fn as_signal(&self) -> PullSourceStructuralSignal<MutableHashMapState<K, V>> {
         PullSourceStructuralSignal::new(self.0.clone())
@@ -118,21 +128,28 @@ impl<K: Clone + Eq + Hash, V: Clone> MutableHashMapState<K, V> {
         self.pull_source.add_diff(diff);
     }
 
+    /// Gets the current value of a key, if it exists.
     #[inline]
     pub fn get(&self, key: &K) -> Option<&V> {
         self.hash_map.get(key)
     }
 
+    /// Returns true if the map currently containes a value for the given key.
     #[inline]
     pub fn contains_key(&self, key: &K) -> bool {
         self.hash_map.contains_key(key)
     }
 
+    /// Creates an immutable snapshot of the current state of this HashMap. This
+    /// operation is fairly cheap thanks to the backing Immutable data structure.
+    /// Future changes to this MutableHashMap will not alter the snapshot.
     #[inline]
     pub fn snapshot(&self) -> HashMap<K, V> {
         self.hash_map.clone()
     }
 
+    /// Replaces the entire contents of this HashMap with new entries. All existing
+    /// data will be cleared.
     pub fn replace<E>(&mut self, entries: E)
     where
         E: Iterator<Item = (K, V)>,
@@ -144,6 +161,7 @@ impl<K: Clone + Eq + Hash, V: Clone> MutableHashMapState<K, V> {
         self.add_diff(MapDiff::Replace {});
     }
 
+    /// Inserts a new value into this HashMap at a given key.
     pub fn insert(&mut self, k: K, v: V) -> Option<V> {
         let remember_k = k.clone();
         let result = self.hash_map.insert(k, v);
@@ -152,6 +170,7 @@ impl<K: Clone + Eq + Hash, V: Clone> MutableHashMapState<K, V> {
         return result;
     }
 
+    /// Removes and returns the value at a given key, if it exists.
     pub fn remove(&mut self, k: &K) -> Option<V> {
         let result = self.hash_map.remove(k);
         if result.is_none() {
@@ -162,6 +181,7 @@ impl<K: Clone + Eq + Hash, V: Clone> MutableHashMapState<K, V> {
         return result;
     }
 
+    /// Removes every value in this HashMap.
     pub fn clear(&mut self) {
         if self.hash_map.is_empty() {
             return;

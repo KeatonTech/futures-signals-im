@@ -82,6 +82,7 @@ where
     type Key: Clone + Eq + Hash;
     type Value: Clone;
     type SelfType: StructuralSignal<Item = HashMapEvent<Self::Key, Self::Value>>;
+
     /// Returns a Signal that tracks the value of a particular key in the Map.
     fn get_signal_for_key(
         self,

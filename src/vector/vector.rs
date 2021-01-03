@@ -46,11 +46,15 @@ impl<T: Clone> Clone for MutableVector<T> {
 }
 
 impl<T: Clone> MutableVector<T> {
+    /// Returns a readonly view into the underlying state that can be used
+    /// to read values from the Vector.
     #[inline]
     pub fn read(&self) -> RwLockReadGuard<MutableVectorState<T>> {
         self.0.read()
     }
 
+    /// Returns a writer into the underlying state that can be used to
+    /// modify the Vector.
     #[inline]
     pub fn write(&self) -> RwLockWriteGuard<MutableVectorState<T>> {
         self.0.write()
@@ -74,6 +78,8 @@ impl<T: Clone> MutableVector<T> {
         MutableVectorReader { 0: self.0.clone() }
     }
 
+    /// Creates a signal that tracks the value of this Vector. Signals can be directly
+    /// used for UI, or can be transformed (TBD).
     #[inline]
     pub fn as_signal(&self) -> ChannelStructuralSignal<VectorEvent<T>> {
         self.0.read().as_signal()
@@ -91,11 +97,15 @@ impl<T: Clone> Clone for MutableVectorReader<T> {
 }
 
 impl<T: Clone> MutableVectorReader<T> {
+    /// Returns a readonly view into the underlying state that can be used
+    /// to read values from the Vector.
     #[inline]
     pub fn read(&self) -> RwLockReadGuard<MutableVectorState<T>> {
         self.0.read()
     }
 
+    /// Creates a signal that tracks the value of this Vector. Signals can be directly
+    /// used for UI, or can be transformed (TBD).
     #[inline]
     pub fn as_signal(&self) -> ChannelStructuralSignal<VectorEvent<T>> {
         self.0.read().as_signal()
@@ -116,10 +126,18 @@ where
 }
 
 impl<T: Clone> MutableVectorState<T> {
+    pub fn len(&self) -> usize {
+        self.vector.len()
+    }
+
+    /// Gets the current value at a given index. Throws if the given
+    /// index is not currently in the vector.
     pub fn get(&self, index: usize) -> &T {
         &self[index]
     }
     
+    /// Creates a signal that tracks the value of this Vector. Signals can be directly
+    /// used for UI, or can be transformed (TBD).
     pub fn as_signal(&self) -> ChannelStructuralSignal<VectorEvent<T>> {
         let (sender, receiver) = mpsc::unbounded();
         if !self.vector.is_empty() {
@@ -135,11 +153,16 @@ impl<T: Clone> MutableVectorState<T> {
         ChannelStructuralSignal::new(receiver)
     }
 
+    /// Creates an immutable snapshot of the current state of this Vector. This
+    /// operation is fairly cheap thanks to the backing Immutable data structure.
+    /// Future changes to this MutableVector will not alter the snapshot.
     #[inline]
     pub fn snapshot(&self) -> Vector<T> {
         self.vector.clone()
     }
 
+    /// Replaces the entire contents of this Vector with new entries. All existing
+    /// data will be cleared.
     pub fn replace<E>(&mut self, entries: E)
     where
         E: Iterator<Item = T>,
@@ -152,6 +175,8 @@ impl<T: Clone> MutableVectorState<T> {
         });
     }
 
+    /// Replaces the value at a given index with a new value. Throws if the given
+    /// index is not currently in the vector.
     pub fn set(&mut self, index: usize, value: T) -> T {
         let result = self.vector.set(index, value);
 
@@ -164,6 +189,8 @@ impl<T: Clone> MutableVectorState<T> {
         return result;
     }
 
+    /// Inserts a new row into this vector at a given index. Throws if the given
+    /// index is not currently in the vector.
     pub fn insert(&mut self, index: usize, value: T) {
         let result = self.vector.insert(index, value);
 
@@ -176,6 +203,7 @@ impl<T: Clone> MutableVectorState<T> {
         return result;
     }
 
+    /// Inserts a new item at the end of this Vector.
     pub fn push_back(&mut self, value: T) {
         let result = self.vector.push_back(value);
 
@@ -188,10 +216,13 @@ impl<T: Clone> MutableVectorState<T> {
         return result;
     }
 
+    /// Inserts a new item at the front of this Vector.
     pub fn push_front(&mut self, value: T) {
         self.insert(0, value)
     }
 
+    /// Removes and returns the item at a given index. Throws if the given
+    /// index is not currently in the vector.
     pub fn remove(&mut self, index: usize) -> T {
         let result = self.vector.remove(index);
         self.notify(VectorEvent {
@@ -201,6 +232,7 @@ impl<T: Clone> MutableVectorState<T> {
         return result;
     }
 
+    /// Removes and returns the first value in this Vector, if the Vector is not empty.
     pub fn pop_front(&mut self) -> Option<T> {
         match self.vector.len() {
             0 => None,
@@ -208,6 +240,7 @@ impl<T: Clone> MutableVectorState<T> {
         }
     }
 
+    /// Removes and returns the last value in this Vector, if the Vector is not empty.
     pub fn pop_back(&mut self) -> Option<T> {
         match self.vector.len() {
             0 => None,
@@ -222,6 +255,7 @@ impl<T: Clone> MutableVectorState<T> {
         }
     }
 
+    /// Removes every value in this Vector.
     pub fn clear(&mut self) {
         if self.vector.is_empty() {
             return;
