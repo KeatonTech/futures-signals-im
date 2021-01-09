@@ -166,7 +166,13 @@ impl<K: Clone + Eq + Hash, V: Clone> MutableHashMapState<K, V> {
         let remember_k = k.clone();
         let result = self.hash_map.insert(k, v);
 
-        self.add_diff(MapDiff::Insert { key: remember_k });
+        if result.is_none() {
+            // No existing value, this is a new insert.
+            self.add_diff(MapDiff::Insert { key: remember_k });
+        } else {
+            // Replaced an existing value at this key.result
+            self.add_diff(MapDiff::Update { key: remember_k });
+        }
         return result;
     }
 

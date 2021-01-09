@@ -60,7 +60,7 @@ where
                             .map(|(k, ov)| (k, (self.map_fn)(&ov))),
                     );
                 }
-                MapDiff::Insert { key } => {
+                MapDiff::Insert { key } | MapDiff::Update { key } => {
                     let mapped_val = (self.map_fn)(map_event.snapshot.get(&key).unwrap());
                     writer.insert(key, mapped_val);
                 }
@@ -128,7 +128,7 @@ where
                             .filter(|(_k, v)| (self.predicate)(v)),
                     );
                 }
-                MapDiff::Insert { key } => {
+                MapDiff::Insert { key } | MapDiff::Update { key } => {
                     let val = map_event.snapshot.get(&key).unwrap();
                     let passes_predicate = (self.predicate)(val);
                     if passes_predicate {
@@ -217,11 +217,24 @@ where
                     let insert_at_index = writer.binary_search_by_key(&key_hash, hashed_key_sort);
                     let val = map_event.snapshot.get(&key).unwrap().clone();
                     match insert_at_index {
-                        Result::Ok(index) => {
-                            writer.set(index, (key, val));
+                        Result::Ok(_) => {
+                            panic!("Found existing value for newly-inserted key in HashMap.entries()");
                         }
                         Result::Err(index) => {
                             writer.insert(index, (key, val));
+                        }
+                    }
+                }
+                MapDiff::Update { key } => {
+                    let key_hash = hash_key(&key);
+                    let insert_at_index = writer.binary_search_by_key(&key_hash, hashed_key_sort);
+                    let val = map_event.snapshot.get(&key).unwrap().clone();
+                    match insert_at_index {
+                        Result::Ok(index) => {
+                            writer.set(index, (key, val));
+                        }
+                        Result::Err(_) => {
+                            panic!("Found no existing value for updated key in HashMap.entries()");
                         }
                     }
                 }

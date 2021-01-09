@@ -1,5 +1,5 @@
-use crate::structural_signal::structural_signal_ext::SnapshottableEvent;
 use crate::structural_signal::pull_source::PullableDiff;
+use crate::structural_signal::structural_signal_ext::SnapshottableEvent;
 use core::hash::Hash;
 use im::HashMap;
 
@@ -8,6 +8,8 @@ pub enum MapDiff<K> {
     Replace {},
 
     Insert { key: K },
+
+    Update { key: K },
 
     Remove { key: K },
 
@@ -22,12 +24,25 @@ where
 
     fn get_key(&self) -> Option<&K> {
         match self {
-            MapDiff::Insert { key } | MapDiff::Remove { key } => Some(key),
+            MapDiff::Insert { key } | MapDiff::Remove { key } | MapDiff::Update { key } => {
+                Some(key)
+            }
             MapDiff::Replace {} | MapDiff::Clear {} => None,
         }
     }
 
-    fn merge_with_previous(self, _previous: MapDiff<K>) -> Option<MapDiff<K>> {
+    fn merge_with_previous(self, previous: MapDiff<K>) -> Option<MapDiff<K>> {
+        if let MapDiff::Insert {key} = previous {
+            // Insert then Remove => Nothing
+            if let MapDiff::Remove {key: _} = self {
+                return None;
+            }
+
+            // Insert then Update => Insert
+            if let MapDiff::Update {key: _} = self {
+                return Some(MapDiff::Insert {key});
+            }
+        }
         Some(self)
     }
 
