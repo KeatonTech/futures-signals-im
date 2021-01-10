@@ -3,4 +3,4 @@ mod event;
 mod vector;
 
 pub use event::{VectorDiff, VectorEvent};
-pub use vector::{MutableVector, MutableVectorReader};
+pub use vector::{MutableVector, MutableVectorReader, MutableVectorState};

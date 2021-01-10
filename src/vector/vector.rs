@@ -1,7 +1,7 @@
-use super::event::{VectorDiff, VectorEvent, VectorIndex};
-use crate::util::notify_senders;
-use crate::ChannelStructuralSignal;
-use futures::channel::mpsc;
+use super::event::{VectorDiff, VectorEvent};
+use crate::structural_signal::pull_source::{
+    PullSourceHost, PullSourceStructuralSignal, StructrualSignalPullSource,
+};
 use im::Vector;
 use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::iter::FromIterator;
@@ -9,6 +9,7 @@ use std::iter::Iterator;
 use std::ops::{Deref, Index};
 use std::slice::SliceIndex;
 use std::sync::Arc;
+use std::cmp::max;
 
 /// The internal state of a MutableVector or MutableVectorReader. All
 /// clones (and readonly clones) will share this same instance.
@@ -19,12 +20,39 @@ use std::sync::Arc;
 #[derive(Debug)]
 pub struct MutableVectorState<T: Clone> {
     vector: Vector<T>,
-    senders: RwLock<Vec<Option<mpsc::UnboundedSender<VectorEvent<T>>>>>,
+    pull_source: StructrualSignalPullSource<VectorDiff>,
+}
+
+impl<T: Clone> PullSourceHost for MutableVectorState<T> {
+    type DiffType = VectorDiff;
+    type EventType = VectorEvent<T>;
+
+    fn get_pull_source<'a>(&'a mut self) -> &'a mut StructrualSignalPullSource<Self::DiffType> {
+        &mut self.pull_source
+    }
+
+    fn make_event(&self, diffs: Vec<Self::DiffType>) -> Self::EventType {
+        VectorEvent {
+            snapshot: self.vector.clone(),
+            diffs: diffs,
+        }
+    }
 }
 
 impl<T: Clone> MutableVectorState<T> {
-    fn notify(&self, event: VectorEvent<T>) {
-        notify_senders(event, self.senders.write());
+    #[inline]
+    fn add_diff(&mut self, diff: VectorDiff) {
+        self.pull_source.add_diff(diff);
+    }
+
+    fn shift_diff_indices(&mut self, fulcrum: usize, delta: isize) {
+        self.pull_source.update_keys(|index| {
+            if *index >= fulcrum {
+                max((*index as isize) + delta, 0) as usize
+            } else {
+                *index
+            }
+        })
     }
 }
 
@@ -39,7 +67,7 @@ impl<T: Clone> Clone for MutableVector<T> {
         MutableVector {
             0: Arc::new(RwLock::new(MutableVectorState {
                 vector: self.0.read().vector.clone(),
-                senders: RwLock::new(vec![]),
+                pull_source: StructrualSignalPullSource::new(),
             })),
         }
     }
@@ -64,7 +92,7 @@ impl<T: Clone> MutableVector<T> {
         MutableVector {
             0: Arc::new(RwLock::new(MutableVectorState {
                 vector: Vector::new(),
-                senders: RwLock::new(vec![]),
+                pull_source: StructrualSignalPullSource::new(),
             })),
         }
     }
@@ -81,8 +109,8 @@ impl<T: Clone> MutableVector<T> {
     /// Creates a signal that tracks the value of this Vector. Signals can be directly
     /// used for UI, or can be transformed (TBD).
     #[inline]
-    pub fn as_signal(&self) -> ChannelStructuralSignal<VectorEvent<T>> {
-        self.0.read().as_signal()
+    pub fn as_signal(&self) -> PullSourceStructuralSignal<MutableVectorState<T>> {
+        PullSourceStructuralSignal::new(self.0.clone())
     }
 }
 
@@ -107,8 +135,8 @@ impl<T: Clone> MutableVectorReader<T> {
     /// Creates a signal that tracks the value of this Vector. Signals can be directly
     /// used for UI, or can be transformed (TBD).
     #[inline]
-    pub fn as_signal(&self) -> ChannelStructuralSignal<VectorEvent<T>> {
-        self.0.read().as_signal()
+    pub fn as_signal(&self) -> PullSourceStructuralSignal<MutableVectorState<T>> {
+        PullSourceStructuralSignal::new(self.0.clone())
     }
 }
 
@@ -135,23 +163,6 @@ impl<T: Clone> MutableVectorState<T> {
     pub fn get(&self, index: usize) -> &T {
         &self[index]
     }
-    
-    /// Creates a signal that tracks the value of this Vector. Signals can be directly
-    /// used for UI, or can be transformed (TBD).
-    pub fn as_signal(&self) -> ChannelStructuralSignal<VectorEvent<T>> {
-        let (sender, receiver) = mpsc::unbounded();
-        if !self.vector.is_empty() {
-            sender
-                .unbounded_send(VectorEvent {
-                    snapshot: self.vector.clone(),
-                    diff: VectorDiff::Replace {},
-                })
-                .unwrap();
-        }
-
-        self.senders.write().push(Some(sender));
-        ChannelStructuralSignal::new(receiver)
-    }
 
     /// Creates an immutable snapshot of the current state of this Vector. This
     /// operation is fairly cheap thanks to the backing Immutable data structure.
@@ -169,10 +180,7 @@ impl<T: Clone> MutableVectorState<T> {
     {
         self.vector.clear();
         self.vector.append(Vector::from_iter(entries));
-        self.notify(VectorEvent {
-            snapshot: self.snapshot(),
-            diff: VectorDiff::Replace {},
-        });
+        self.add_diff(VectorDiff::Replace {});
     }
 
     /// Replaces the value at a given index with a new value. Throws if the given
@@ -180,12 +188,7 @@ impl<T: Clone> MutableVectorState<T> {
     pub fn set(&mut self, index: usize, value: T) -> T {
         let result = self.vector.set(index, value);
 
-        self.notify(VectorEvent {
-            snapshot: self.snapshot(),
-            diff: VectorDiff::Update {
-                index: VectorIndex::Index(index),
-            },
-        });
+        self.add_diff(VectorDiff::Update { index });
         return result;
     }
 
@@ -194,12 +197,8 @@ impl<T: Clone> MutableVectorState<T> {
     pub fn insert(&mut self, index: usize, value: T) {
         let result = self.vector.insert(index, value);
 
-        self.notify(VectorEvent {
-            snapshot: self.snapshot(),
-            diff: VectorDiff::Insert {
-                index: VectorIndex::Index(index),
-            },
-        });
+        self.shift_diff_indices(index, 1);
+        self.add_diff(VectorDiff::Insert { index });
         return result;
     }
 
@@ -207,11 +206,8 @@ impl<T: Clone> MutableVectorState<T> {
     pub fn push_back(&mut self, value: T) {
         let result = self.vector.push_back(value);
 
-        self.notify(VectorEvent {
-            snapshot: self.snapshot(),
-            diff: VectorDiff::Insert {
-                index: VectorIndex::LastIndex,
-            },
+        self.add_diff(VectorDiff::Insert {
+            index: self.vector.len() - 1,
         });
         return result;
     }
@@ -225,10 +221,8 @@ impl<T: Clone> MutableVectorState<T> {
     /// index is not currently in the vector.
     pub fn remove(&mut self, index: usize) -> T {
         let result = self.vector.remove(index);
-        self.notify(VectorEvent {
-            snapshot: self.snapshot(),
-            diff: VectorDiff::Remove { index: VectorIndex::Index(index) },
-        });
+        self.add_diff(VectorDiff::Remove { index });
+        self.shift_diff_indices(index, -1);
         return result;
     }
 
@@ -236,7 +230,7 @@ impl<T: Clone> MutableVectorState<T> {
     pub fn pop_front(&mut self) -> Option<T> {
         match self.vector.len() {
             0 => None,
-            _ => Some(self.remove(0))
+            _ => Some(self.remove(0)),
         }
     }
 
@@ -246,9 +240,8 @@ impl<T: Clone> MutableVectorState<T> {
             0 => None,
             _ => {
                 let result = self.vector.pop_back().unwrap();
-                self.notify(VectorEvent {
-                    snapshot: self.snapshot(),
-                    diff: VectorDiff::Remove { index: VectorIndex::LastIndex },
+                self.add_diff(VectorDiff::Remove {
+                    index: self.vector.len(),
                 });
                 Some(result)
             }
@@ -262,10 +255,7 @@ impl<T: Clone> MutableVectorState<T> {
         }
 
         self.vector.clear();
-        self.notify(VectorEvent {
-            snapshot: self.snapshot(),
-            diff: VectorDiff::Clear {},
-        });
+        self.add_diff(VectorDiff::Clear {});
     }
 }
 

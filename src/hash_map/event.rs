@@ -30,6 +30,17 @@ where
             MapDiff::Replace {} | MapDiff::Clear {} => None,
         }
     }
+    
+    fn set_key(&mut self, new_key: K) {
+        match self {
+            MapDiff::Insert { key } | MapDiff::Remove { key } | MapDiff::Update { key } => {
+                *key = new_key;
+            }
+            MapDiff::Replace {} | MapDiff::Clear {} => {
+                panic!("Cannot set key on non-keyed MapDiff");
+            }
+        }
+    }
 
     fn merge_with_previous(self, previous: MapDiff<K>) -> Option<MapDiff<K>> {
         if let MapDiff::Insert {key} = previous {

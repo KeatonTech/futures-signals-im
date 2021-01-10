@@ -2,8 +2,7 @@ use super::event::{HashMapEvent, MapDiff};
 use super::hash_map::{MutableHashMap, MutableHashMapState};
 use crate::structural_signal::pull_source::PullSourceStructuralSignal;
 use crate::structural_signal::transformer::StructuralSignalTransformer;
-use crate::vector::{MutableVector, VectorEvent};
-use crate::ChannelStructuralSignal;
+use crate::vector::{MutableVector, MutableVectorState};
 use core::hash::Hash;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::Hasher;
@@ -197,7 +196,7 @@ where
     V: Clone,
 {
     type InputEvent = HashMapEvent<K, V>;
-    type OutputSignal = ChannelStructuralSignal<VectorEvent<(K, V)>>;
+    type OutputSignal = PullSourceStructuralSignal<MutableVectorState<(K, V)>>;
 
     fn apply_event(&mut self, map_event: HashMapEvent<K, V>) {
         let mut writer = self.vector.write();

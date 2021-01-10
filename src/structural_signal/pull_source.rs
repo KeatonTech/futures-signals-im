@@ -1,4 +1,5 @@
 use crate::StructuralSignal;
+use im::hashmap;
 use im::HashMap; // Doesn't need to be immutable, but no need to pull in another HashMap.
 use parking_lot::RwLock;
 use pin_project::pin_project;
@@ -18,6 +19,7 @@ where
     type KeyType: Clone + Eq + Hash;
 
     fn get_key(&self) -> Option<&Self::KeyType>;
+    fn set_key(&mut self, new_key: Self::KeyType);
     fn merge_with_previous(self, previous: Self) -> Option<Self>;
     fn full_replace() -> Self;
 }
@@ -113,6 +115,25 @@ impl<DiffType: PullableDiff> StructrualSignalPullSource<DiffType> {
         self.signal_last_diff_numbers
             .insert(signal_id, current_diff_number);
         return results;
+    }
+
+    pub fn update_keys<F>(&mut self, updater: F)
+    where
+        F: Fn(&DiffType::KeyType) -> DiffType::KeyType,
+    {
+        let mut tmp_diffs_per_key = hashmap! {};
+        std::mem::swap(&mut self.diffs_per_key, &mut tmp_diffs_per_key);
+        self.diffs_per_key = tmp_diffs_per_key
+            .into_iter()
+            .map(|(k, v)| (updater(&k), v))
+            .collect();
+
+        for (new_key, diff_index) in self.diffs_per_key.iter() {
+            self.diffs
+                .get_mut(diff_index)
+                .unwrap()
+                .set_key(new_key.clone());
+        }
     }
 
     pub fn get_next_signal_id(&mut self) -> SignalId {
