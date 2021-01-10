@@ -11,6 +11,22 @@ functionality. In particular, any StructuralSignal (the equivalent of `SignalVec
 provides a handy escape hatch for those times when you want to access your data
 structures synchronously.
 
+### Other Differences from `futures_signals`
+
+* Most signals 'pull' changes from the backing data structure, instead of relying on that
+  structure to 'broadcast' changes out as they happen. This allows redundant changes to be
+  optimized out on the fly. For example, if a certain key in a map changes twice in
+  between signal polls, the signal will only hear about the second change (as the first is
+  already obsolete). This is more efficient in cases where the many changes can happen in
+  between polls but doesn't multithread as well. This is likely the right tradeoff for UX
+  work, but it's possible there are still some cases where futures_signals performs better.
+
+* Maps and Vectors share the same signal type, called StructuralSignal. This makes it easier
+  to add extension functionality that can apply to all mutable structures.
+
+* All transforms (such as `map` and `filter`) create a data structure internally, so they
+  take more memory than `futures_signals` equivalents. In some cases they may be faster.
+
 ## Example
 
 #### Vectors
