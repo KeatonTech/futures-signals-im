@@ -27,6 +27,8 @@ where
     #[pin]
     transformed_signal: T::OutputSignal,
     transformer: T,
+
+    is_closed: bool,
 }
 
 impl<IS, II, T> TransformedStructuralSignal<IS, II, T>
@@ -41,6 +43,7 @@ where
             input_signal,
             transformed_signal,
             transformer,
+            is_closed: false,
         }
     }
 }
@@ -62,6 +65,7 @@ where
             mut input_signal,
             transformed_signal,
             transformer,
+            is_closed,
         } = self.project();
 
         loop {
@@ -71,7 +75,8 @@ where
                     transformer.apply_event(event);
                 }
                 Poll::Ready(None) => {
-                    return Poll::Ready(None);
+                    *is_closed = true;
+                    break;
                 }
                 Poll::Pending => {
                     break;
@@ -79,6 +84,11 @@ where
             }
         }
 
-        return transformed_signal.poll_change(cx);
+        let result = transformed_signal.poll_change(cx);
+        if *is_closed && !result.is_ready() {
+            Poll::Ready(None)
+        } else {
+            result
+        }
     }
 }
