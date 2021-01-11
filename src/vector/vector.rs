@@ -9,7 +9,8 @@ use std::iter::Iterator;
 use std::ops::{Deref, Index};
 use std::slice::SliceIndex;
 use std::sync::Arc;
-use std::cmp::max;
+use std::cmp::{Ordering, max};
+use crate::structural_signal::pull_source::PullableDiff;
 
 /// The internal state of a MutableVector or MutableVectorReader. All
 /// clones (and readonly clones) will share this same instance.
@@ -31,7 +32,24 @@ impl<T: Clone> PullSourceHost for MutableVectorState<T> {
         &mut self.pull_source
     }
 
-    fn make_event(&self, diffs: Vec<Self::DiffType>) -> Self::EventType {
+    fn make_event(&self, mut diffs: Vec<Self::DiffType>) -> Self::EventType {
+
+        // Diffs must be sorted in ascending order by index, otherwise
+        // indices may not yet be in the correct location.
+        diffs.sort_unstable_by(|diff_a, diff_b| {
+            match diff_a.get_key() {
+                Some(index_a) => {
+                    match diff_b.get_key() {
+                        Some(index_b) => {
+                            index_a.cmp(index_b)
+                        },
+                        None => Ordering::Greater
+                    }
+                }
+                None => Ordering::Less
+            }
+        });
+
         VectorEvent {
             snapshot: self.vector.clone(),
             diffs: diffs,
