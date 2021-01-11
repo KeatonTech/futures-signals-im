@@ -45,7 +45,7 @@ where
 }
 
 /// Extracts a list of snapshots from a list of HashMapEvents.
-pub fn get_snapshot<K, V>(events: &Vec<HashMapEvent<K, V>>) -> Vec<HashMap<K, V>>
+pub fn get_snapshots<K, V>(events: &Vec<HashMapEvent<K, V>>) -> Vec<HashMap<K, V>>
 where
     K: Clone + Hash + Eq,
     V: Clone,

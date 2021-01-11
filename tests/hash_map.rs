@@ -15,7 +15,7 @@ fn map_values() {
     let poll_1 = util::poll_all(&mut multiplied);
     assert_eq!(poll_1.is_done, false);
     assert_eq!(
-        *util::get_snapshot(&poll_1.items).last().unwrap(),
+        *util::get_snapshots(&poll_1.items).last().unwrap(),
         hashmap! {
             1 => 2,
             2 => 4,
@@ -34,7 +34,7 @@ fn map_values() {
     let poll_2 = util::poll_all(&mut multiplied);
     assert_eq!(poll_2.is_done, false);
     assert_eq!(
-        *util::get_snapshot(&poll_2.items).last().unwrap(),
+        *util::get_snapshots(&poll_2.items).last().unwrap(),
         hashmap! {
             1 => 2,
             2 => 4,
