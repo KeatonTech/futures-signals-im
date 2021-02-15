@@ -1,6 +1,6 @@
+use super::{MutableVector, MutableVectorState, VectorDiff, VectorEvent};
 use crate::structural_signal::pull_source::PullSourceStructuralSignal;
 use crate::structural_signal::transformer::StructuralSignalTransformer;
-use super::{MutableVector, MutableVectorState, VectorEvent, VectorDiff};
 use std::marker::PhantomData;
 
 // ** MAP ** //
@@ -10,7 +10,7 @@ where
     OV: Clone,
     F: Fn(&IV) -> OV,
 {
-    hash_map: MutableVector<OV>,
+    vector: MutableVector<OV>,
     map_fn: F,
     input_type: PhantomData<IV>,
 }
@@ -22,7 +22,7 @@ where
 {
     pub(crate) fn new(map_fn: F) -> MapVectorTransformer<F, IV, OV> {
         MapVectorTransformer {
-            hash_map: MutableVector::new(),
+            vector: MutableVector::new(),
             map_fn: map_fn,
             input_type: PhantomData,
         }
@@ -39,7 +39,7 @@ where
     type OutputSignal = PullSourceStructuralSignal<MutableVectorState<OV>>;
 
     fn apply_event(&mut self, map_event: VectorEvent<IV>) {
-        let mut writer = self.hash_map.write();
+        let mut writer = self.vector.write();
         for diff in map_event.diffs {
             match diff {
                 VectorDiff::Replace {} => {
@@ -51,11 +51,26 @@ where
                             .map(|v| (self.map_fn)(&v)),
                     );
                 }
-                VectorDiff::Insert { index } | VectorDiff::Update { index } => {
-                    let mapped_val = (self.map_fn)(map_event.snapshot.get(index).unwrap());
+                VectorDiff::Insert {
+                    index,
+                    snapshot_index: _,
+                } => {
+                    let mapped_val =
+                        (self.map_fn)(&diff.get_value_from_snapshot(&map_event.snapshot).unwrap());
                     writer.insert(index, mapped_val);
                 }
-                VectorDiff::Remove { index } => {
+                VectorDiff::Update {
+                    index,
+                    snapshot_index: _,
+                } => {
+                    let mapped_val =
+                        (self.map_fn)(&diff.get_value_from_snapshot(&map_event.snapshot).unwrap());
+                    writer.set(index, mapped_val);
+                }
+                VectorDiff::Remove {
+                    index,
+                    snapshot_index: _,
+                } => {
                     writer.remove(index);
                 }
                 VectorDiff::Clear {} => {
@@ -67,6 +82,6 @@ where
 
     #[inline]
     fn get_signal(&self) -> Self::OutputSignal {
-        self.hash_map.as_signal()
+        self.vector.as_signal()
     }
 }

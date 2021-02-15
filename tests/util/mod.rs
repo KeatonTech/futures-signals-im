@@ -1,9 +1,9 @@
 use futures_executor::block_on;
 use futures_util::future::poll_fn;
-use im::hashmap::HashMap;
 use pin_utils::pin_mut;
 use signals_im::hash_map::{HashMapEvent, MapDiff};
 use signals_im::StructuralSignal;
+use signals_im::SnapshottableEvent;
 use std::hash::Hash;
 use std::task::Poll;
 
@@ -45,15 +45,14 @@ where
 }
 
 /// Extracts a list of snapshots from a list of HashMapEvents.
-pub fn get_snapshots<K, V>(events: &Vec<HashMapEvent<K, V>>) -> Vec<HashMap<K, V>>
+pub fn get_snapshots<S>(events: &Vec<S>) -> Vec<S::SnapshotType>
 where
-    K: Clone + Hash + Eq,
-    V: Clone,
+    S: SnapshottableEvent
 {
     events
         .clone()
         .into_iter()
-        .map(|event| event.snapshot)
+        .map(|event| event.snapshot())
         .collect()
 }
 

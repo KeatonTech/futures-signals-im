@@ -1,4 +1,5 @@
 use crate::structural_signal::pull_source::PullableDiff;
+use crate::structural_signal::pull_source::DiffMergeResult;
 use crate::structural_signal::structural_signal_ext::SnapshottableEvent;
 use core::hash::Hash;
 use im::HashMap;
@@ -31,6 +32,12 @@ where
         }
     }
     
+    fn get_snapshot_key(&self) -> Option<&K> {
+       // No op. Map events do not need snapshot keys.
+       self.get_key()
+    }
+
+    
     fn set_key(&mut self, new_key: K) {
         match self {
             MapDiff::Insert { key } | MapDiff::Remove { key } | MapDiff::Update { key } => {
@@ -41,20 +48,29 @@ where
             }
         }
     }
+    
+    fn set_snapshot_key(&mut self, _new_key: K) {
+       // No op. Map events do not need snapshot keys.
+    }
 
-    fn merge_with_previous(self, previous: MapDiff<K>) -> Option<MapDiff<K>> {
-        if let MapDiff::Insert {key} = previous {
+    fn merge_with_previous(&self, previous: &MapDiff<K>) -> DiffMergeResult<MapDiff<K>> {
+        if let MapDiff::Insert {key: _} = previous {
             // Insert then Remove => Nothing
             if let MapDiff::Remove {key: _} = self {
-                return None;
+                return DiffMergeResult::discard_both();
             }
 
             // Insert then Update => Insert
             if let MapDiff::Update {key: _} = self {
-                return Some(MapDiff::Insert {key});
+                return DiffMergeResult::ignore();
+            }
+
+            // Insert then Insert, on the same key, should never happen
+            if let MapDiff::Insert {key: _} = self {
+                panic!("Found two inserts on the same key. The second should be an update.")
             }
         }
-        Some(self)
+        return DiffMergeResult::replace();
     }
 
     fn full_replace() -> MapDiff<K> {

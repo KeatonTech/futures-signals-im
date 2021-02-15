@@ -4,13 +4,13 @@ use crate::structural_signal::pull_source::{
 };
 use im::Vector;
 use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
+use std::cmp::max;
+use std::convert::TryInto;
 use std::iter::FromIterator;
 use std::iter::Iterator;
 use std::ops::{Deref, Index};
 use std::slice::SliceIndex;
 use std::sync::Arc;
-use std::cmp::{Ordering, max};
-use crate::structural_signal::pull_source::PullableDiff;
 
 /// The internal state of a MutableVector or MutableVectorReader. All
 /// clones (and readonly clones) will share this same instance.
@@ -32,24 +32,7 @@ impl<T: Clone> PullSourceHost for MutableVectorState<T> {
         &mut self.pull_source
     }
 
-    fn make_event(&self, mut diffs: Vec<Self::DiffType>) -> Self::EventType {
-
-        // Diffs must be sorted in ascending order by index, otherwise
-        // indices may not yet be in the correct location.
-        diffs.sort_unstable_by(|diff_a, diff_b| {
-            match diff_a.get_key() {
-                Some(index_a) => {
-                    match diff_b.get_key() {
-                        Some(index_b) => {
-                            index_a.cmp(index_b)
-                        },
-                        None => Ordering::Greater
-                    }
-                }
-                None => Ordering::Less
-            }
-        });
-
+    fn make_event(&self, diffs: Vec<Self::DiffType>) -> Self::EventType {
         VectorEvent {
             snapshot: self.vector.clone(),
             diffs: diffs,
@@ -206,7 +189,10 @@ impl<T: Clone> MutableVectorState<T> {
     pub fn set(&mut self, index: usize, value: T) -> T {
         let result = self.vector.set(index, value);
 
-        self.add_diff(VectorDiff::Update { index });
+        self.add_diff(VectorDiff::Update {
+            index,
+            snapshot_index: index.try_into().unwrap(),
+        });
         return result;
     }
 
@@ -216,16 +202,21 @@ impl<T: Clone> MutableVectorState<T> {
         let result = self.vector.insert(index, value);
 
         self.shift_diff_indices(index, 1);
-        self.add_diff(VectorDiff::Insert { index });
+        self.add_diff(VectorDiff::Insert {
+            index,
+            snapshot_index: index.try_into().unwrap(),
+        });
         return result;
     }
 
     /// Inserts a new item at the end of this Vector.
     pub fn push_back(&mut self, value: T) {
+        let index = self.vector.len();
         let result = self.vector.push_back(value);
 
         self.add_diff(VectorDiff::Insert {
-            index: self.vector.len() - 1,
+            index,
+            snapshot_index: index.try_into().unwrap(),
         });
         return result;
     }
@@ -239,8 +230,11 @@ impl<T: Clone> MutableVectorState<T> {
     /// index is not currently in the vector.
     pub fn remove(&mut self, index: usize) -> T {
         let result = self.vector.remove(index);
-        self.add_diff(VectorDiff::Remove { index });
-        self.shift_diff_indices(index, -1);
+        self.add_diff(VectorDiff::Remove {
+            index,
+            snapshot_index: index.try_into().unwrap(),
+        });
+        self.shift_diff_indices(index + 1, -1);
         return result;
     }
 
@@ -260,6 +254,7 @@ impl<T: Clone> MutableVectorState<T> {
                 let result = self.vector.pop_back().unwrap();
                 self.add_diff(VectorDiff::Remove {
                     index: self.vector.len(),
+                    snapshot_index: self.vector.len().try_into().unwrap(),
                 });
                 Some(result)
             }

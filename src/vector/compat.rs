@@ -57,7 +57,10 @@ where
                     values: snapshot.clone().into_iter().collect(),
                 }
             }
-            VectorDiff::Insert { index } => {
+            VectorDiff::Insert {
+                index, 
+                snapshot_index: _,
+            } => {
                 *length += 1;
                 if *index == *length - 1 {
                     VecDiff::Push {
@@ -69,12 +72,18 @@ where
                         value: snapshot[*index].clone(),
                     }
                 }
-            }
-            VectorDiff::Update { index } => VecDiff::UpdateAt {
+            },
+            VectorDiff::Update {
+                index,
+                snapshot_index: _,
+            } => VecDiff::UpdateAt {
                 index: *index,
                 value: snapshot[*index].clone(),
             },
-            VectorDiff::Remove { index } => {
+            VectorDiff::Remove {
+                index,
+                snapshot_index: _,
+            } => {
                 *length -= 1;
                 if *index == *length {
                     VecDiff::Pop {}
